@@ -107,7 +107,7 @@ module.exports = {
   included() {
     this._super.included.apply(this, arguments);
 
-    if (!this.shouldPolyfill) {
+    if (!this.shouldPolyfillBuiltinComponents) {
       return;
     }
 
@@ -115,7 +115,7 @@ module.exports = {
   },
 
   treeForVendor(rawVendorTree) {
-    if (!this.shouldPolyfill) {
+    if (!this.shouldPolyfillBuiltinComponents) {
       return;
     }
 

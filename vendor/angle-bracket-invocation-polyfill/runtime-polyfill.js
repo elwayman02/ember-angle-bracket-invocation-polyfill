@@ -91,7 +91,153 @@ import { lte, gte } from 'ember-compatibility-helpers';
     return new MergedAttributesReference(references);
   }
 
-  if (gte('3.1.0-beta.1')) {
+  if (gte('3.4.0-beta.1')) {
+    const buildRegistry = function buildRegistry() {
+      let registry = this._super(...arguments);
+
+      let compilerName = gte('3.2.0-alpha.1')
+        ? P`template-compiler:main`
+        : P`template-options:main`;
+      let TemplateCompiler = registry.resolve(compilerName);
+
+      let originalCreate = TemplateCompiler.create;
+      TemplateCompiler.create = function(options) {
+        // let owner = getOwner(options);
+        let compiler = originalCreate(...arguments);
+        let compileTimeLookup = compiler.resolver;
+        let runtimeResolver = compileTimeLookup.resolver;
+
+        // setup our reference capture system
+        runtimeResolver.builtInHelpers['-merge-attrs'] = mergeAttributesHelper;
+
+        class AttributeTracker {
+          constructor(environment, element, attributeName, reference) {
+            this._environment = environment;
+            this._attribute = environment.attributeFor(element, attributeName, false);
+            this._reference = reference;
+            this.tag = reference.tag;
+            this.lastRevision = this.tag.value();
+          }
+
+          set(dom) {
+            this._attribute.set(dom, this._reference.value(), this._environment);
+            this.lastRevision = this.tag.value();
+          }
+
+          update() {
+            if (!this.tag.validate(this.lastRevision)) {
+              this._attribute.update(this._reference.value(), this._environment);
+              this.lastRevision = this.tag.value();
+            }
+          }
+        }
+
+        runtimeResolver.builtInModifiers = Ember.assign({}, runtimeResolver.builtInModifiers);
+        runtimeResolver.builtInModifiers._splattributes = {
+          create(element, args, scope, dom) {
+            let environment = owner.lookup('service:-glimmer-environment');
+            let domBuilder = clientBuilder(environment, {});
+            domBuilder.constructing = element;
+
+            let { positional } = args.capture();
+            let invocationAttributesReference = positional.at(0);
+            let invocationAttributes = invocationAttributesReference.value();
+            let attributeNames = invocationAttributes ? Object.keys(invocationAttributes) : [];
+            let dynamicAttributes = {};
+            let references = [];
+
+            for (let i = 0; i < attributeNames.length; i++) {
+              let attributeName = attributeNames[i];
+              let ref = invocationAttributesReference.get(attributeName);
+              dynamicAttributes[attributeName] = new AttributeTracker(
+                environment,
+                element,
+                attributeName,
+                ref
+              );
+              references.push(ref);
+            }
+
+            return {
+              references,
+              dynamicAttributes,
+              dom,
+              domBuilder,
+              environment,
+            };
+          },
+
+          getTag({ references }) {
+            return combineTagged(references);
+          },
+
+          install(bucket) {
+            let { dynamicAttributes, domBuilder } = bucket;
+
+            for (let name in dynamicAttributes) {
+              let attribute = dynamicAttributes[name];
+              attribute.set(domBuilder);
+            }
+          },
+
+          update(bucket) {
+            let { dynamicAttributes } = bucket;
+
+            for (let name in dynamicAttributes) {
+              let attribute = dynamicAttributes[name];
+              attribute.update();
+            }
+          },
+
+          getDestructor() {},
+        };
+
+        // setup our custom attribute bindings directly from the references passed in
+        let ORIGINAL_LOOKUP_COMPONENT_DEFINITION = runtimeResolver._lookupComponentDefinition;
+        let manager = null;
+        runtimeResolver._lookupComponentDefinition = function() {
+          // call the original implementation
+          let definition = ORIGINAL_LOOKUP_COMPONENT_DEFINITION.apply(this, arguments);
+
+          if (definition && manager) {
+            definition.manager = manager;
+            return definition;
+          }
+
+          if (definition) {
+            let Manager = definition.manager.constructor;
+            manager = definition.manager = new Manager();
+
+            let ORIGINAL_DID_CREATE_ELEMENT = manager.didCreateElement;
+            manager.didCreateElement = function(bucket, element, operations) {
+              debugger;
+              ORIGINAL_DID_CREATE_ELEMENT.apply(this, arguments);
+              let { args } = bucket;
+              if (args.has('__ANGLE_ATTRS__')) {
+                let angleAttrs = args.get('__ANGLE_ATTRS__');
+                // this use of value is OK because the set of keys isn't allowed to change dynamically
+                let snapshot = angleAttrs.value();
+                if (snapshot) {
+                  for (let attributeName in snapshot) {
+                    let attributeReference = angleAttrs.get(attributeName);
+                    operations.setAttribute(attributeName, attributeReference, false, null);
+                  }
+                }
+              }
+            };
+          }
+
+          return definition;
+        };
+
+        return compiler;
+      };
+
+      return registry;
+    };
+    Application.reopenClass({ buildRegistry });
+    Engine.reopenClass({ buildRegistry });
+  } else if (gte('3.1.0-beta.1')) {
     const buildRegistry = function buildRegistry() {
       let registry = this._super(...arguments);
 
